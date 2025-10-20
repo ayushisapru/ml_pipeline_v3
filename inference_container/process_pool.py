@@ -228,6 +228,29 @@ _worker_snapshot: Dict[str, Any] | None = None
 _worker_main_module = None
 _worker_main_lock = threading.Lock()
 
+_SNAPSHOT_IGNORE_KEYS = {"timestamp"}
+
+
+def _normalize_snapshot(snapshot: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not snapshot:
+        return {}
+    try:
+        return {k: v for k, v in snapshot.items() if k not in _SNAPSHOT_IGNORE_KEYS}
+    except AttributeError:
+        return {}
+
+
+def _capture_worker_state() -> Dict[str, Any]:
+    if _worker_inferencer is None:
+        return {}
+    state = {
+        "run_id": getattr(_worker_inferencer, "current_run_id", None),
+        "model_type": getattr(_worker_inferencer, "model_type", None),
+        "config_hash": getattr(_worker_inferencer, "current_config_hash", None),
+        "model_uri": getattr(_worker_inferencer, "current_model_uri", None),
+    }
+    return _normalize_snapshot(state)
+
 
 def _format_missing_columns_error(exc: KeyError) -> str:
     raw = exc.args[0] if exc.args else ""
@@ -278,7 +301,7 @@ def _load_worker_main():
 def _worker_initializer(snapshot: Dict[str, Any]) -> None:
     try:
         global _worker_inferencer, _worker_snapshot
-        _worker_snapshot = snapshot or {}
+        _worker_snapshot = _normalize_snapshot(snapshot)
         if os.getenv("USE_DUMMY_INFERENCER", "0") in {"1", "true", "TRUE"}:
             _worker_inferencer = _create_dummy_inferencer()
             return
@@ -286,6 +309,7 @@ def _worker_initializer(snapshot: Dict[str, Any]) -> None:
 
         _worker_inferencer = worker_main.inferencer
         _prepare_worker_model(worker_main, snapshot)
+        _worker_snapshot = _capture_worker_state()
     except Exception as exc:  # pragma: no cover - failsafe visibility
         try:
             print({
@@ -319,15 +343,19 @@ def _ensure_worker_inferencer(snapshot: Optional[Dict[str, Any]]) -> Any:
     if os.getenv("USE_DUMMY_INFERENCER", "0") in {"1", "true", "TRUE"}:
         return _worker_inferencer
     worker_main = _load_worker_main()
+    normalized_snapshot = _normalize_snapshot(snapshot)
 
     with _worker_lock:
         if _worker_inferencer is None:
             _worker_inferencer = worker_main.inferencer
-        if snapshot and snapshot != _worker_snapshot:
-            _worker_snapshot = snapshot
             _prepare_worker_model(worker_main, snapshot)
+            _worker_snapshot = _capture_worker_state()
+        elif normalized_snapshot and normalized_snapshot != (_worker_snapshot or {}):
+            _prepare_worker_model(worker_main, snapshot)
+            _worker_snapshot = _capture_worker_state()
         if getattr(_worker_inferencer, "current_model", None) is None:
             _prepare_worker_model(worker_main, snapshot)
+            _worker_snapshot = _capture_worker_state()
         if getattr(_worker_inferencer, "current_model", None) is None:
             raise InferenceHTTPError(status_code=503, detail="Model not loaded yet", worker_id=os.getpid())
         return _worker_inferencer

@@ -852,7 +852,16 @@ async def predict(
             worker_duration_ms=worker_duration_ms,
             worker_predictions=worker_predictions,
         )
-        return worker_response
+        response_payload = worker_response
+        if isinstance(response_payload, dict):
+            response_payload.setdefault("req_id", req_id)
+            response_payload.setdefault("cached", False)
+            try:
+                inf_store = _get_inferencer()
+                setattr(inf_store, "last_prediction_response", response_payload.copy())
+            except Exception:
+                pass
+        return response_payload
     except asyncio.TimeoutError:
         future.cancel()
         end_time = time.time()

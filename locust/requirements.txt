@@ -1,2 +1,5 @@
 # Add extra Python dependencies for custom test logic here
-# (The base locustio/locust image already includes Locust and its core deps)
+# The base locust image already includes Locust and core deps
+
+# Example:
+# requests==2.31.0
