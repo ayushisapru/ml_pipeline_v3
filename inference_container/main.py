@@ -1,15 +1,43 @@
 # predict_container/main.py
 from client_utils import get_file, post_file
 from data_utils import strip_timezones
-from kafka_utils import (
-    create_producer,
-    create_consumer,
-    create_consumer_configurable,
-    produce_message,
-    consume_messages,
-    publish_error,
-    commit_offsets_sync,
-)
+import os
+# Kafka enable/disable flag (default true unless explicitly set to false-like values)
+ENABLE_KAFKA = os.getenv("ENABLE_KAFKA", "true").lower() in {"1", "true", "yes"}
+print(f"[config] Kafka enabled: {ENABLE_KAFKA}")
+
+if ENABLE_KAFKA:
+    from kafka_utils import (
+        create_producer,
+        create_consumer,
+        create_consumer_configurable,
+        produce_message,
+        consume_messages,
+        publish_error,
+        commit_offsets_sync,
+    )
+else:
+    # Define no-op placeholders to avoid import-time side-effects when Kafka is disabled
+    def create_producer(*a, **k):
+        return None
+
+    def create_consumer(*a, **k):
+        return None
+
+    def create_consumer_configurable(*a, **k):
+        return None
+
+    def produce_message(*a, **k):
+        print('[kafka-disabled] skipped produce_message()')
+
+    def consume_messages(*a, **k):
+        return []
+
+    def publish_error(*a, **k):
+        print('[kafka-disabled] skipped publish_error()')
+
+    def commit_offsets_sync(*a, **k):
+        return None
 from inferencer import Inferencer
 import os
 import pickle
@@ -195,12 +223,18 @@ _PROMOTED_STATE = {
 }
 
 # --- Kafka Producer for Inference Output and DLQ ---
+<<<<<<< Updated upstream
 # Kafka enable/disable flag (guard Kafka usage across this module)
 ENABLE_KAFKA = os.getenv("ENABLE_KAFKA", "0").lower() in {"1", "true", "yes"}
 print(f"[config] Kafka enabled: {ENABLE_KAFKA}")
 
 # Only create a producer when Kafka is enabled. If disabled, keep producer=None
 producer = create_producer() if ENABLE_KAFKA else None
+=======
+# Producer will be created lazily during runtime start to avoid import-time
+# connection attempts that can fail if Kafka is not reachable.
+producer = None
+>>>>>>> Stashed changes
 dlq_topic = f"DLQ-{PRODUCER_TOPIC}"
 
 # --- Kafka Callback Functions Factory ---
@@ -235,14 +269,18 @@ def _kafka_callback_factory(service_instance: Inferencer, source_name: str, mess
                 "partition": getattr(message, 'partition', None),
                 "offset": getattr(message, 'offset', None),
             })
-        print({
-            "service": "inference",
-            "event": "queue_enqueued",
-            "source": source_name,
-            "depth": message_queue_ref.qsize(),
-            "bounded": int(USE_BOUNDED_QUEUE),
-            "maxsize": QUEUE_MAXSIZE if USE_BOUNDED_QUEUE else -1
-        })
+        if ENABLE_KAFKA:
+            try:
+                print({
+                    "service": "inference",
+                    "event": "queue_enqueued",
+                    "source": source_name,
+                    "depth": message_queue_ref.qsize(),
+                    "bounded": int(USE_BOUNDED_QUEUE),
+                    "maxsize": QUEUE_MAXSIZE if USE_BOUNDED_QUEUE else -1,
+                })
+            except Exception:
+                pass
     return callback
 
 # --- Worker Thread Function ---
@@ -794,13 +832,25 @@ def _start_runtime():
 
     _load_promoted_pointer(inferencer)
 
-    # Start the worker thread, passing the service instance and queue
-    worker_thread = threading.Thread(
-        target=message_handler,
-        args=(inferencer, message_queue),
-        daemon=True
-    )
-    worker_thread.start()
+    # Create producer lazily when Kafka is enabled. This ensures the service
+    # starts successfully even if Kafka broker is unreachable.
+    global producer
+    if ENABLE_KAFKA:
+        try:
+            producer = create_producer()
+            print({"service": "inference", "event": "producer_created"})
+        except Exception as e:  # pragma: no cover - best-effort
+            print({"service": "inference", "event": "producer_create_failed", "error": str(e)})
+            producer = None
+
+    # Start the worker thread only when Kafka is enabled (queue-based processing)
+    if ENABLE_KAFKA:
+        worker_thread = threading.Thread(
+            target=message_handler,
+            args=(inferencer, message_queue),
+            daemon=True,
+        )
+        worker_thread.start()
 
     # Consumer configuration flags
     USE_MANUAL_COMMIT = os.environ.get("USE_MANUAL_COMMIT", "false").lower() in {"1","true","yes"}
@@ -897,14 +947,15 @@ def _start_runtime():
             except Exception: pass
 
     # Start consumers with the new loop (training, preprocessing, promotion)
-    threading.Thread(target=_consumer_loop, args=(TRAINING_TOPIC, "training"), daemon=True).start()
-    print(f"Started Kafka consumer for training topic: {TRAINING_TOPIC}")
+    if ENABLE_KAFKA:
+        threading.Thread(target=_consumer_loop, args=(TRAINING_TOPIC, "training"), daemon=True).start()
+        print(f"Started Kafka consumer for training topic: {TRAINING_TOPIC}")
 
-    threading.Thread(target=_consumer_loop, args=(PREPROCESSING_TOPIC, "preprocessing"), daemon=True).start()
-    print(f"Started Kafka consumer for preprocessing topic: {PREPROCESSING_TOPIC}")
+        threading.Thread(target=_consumer_loop, args=(PREPROCESSING_TOPIC, "preprocessing"), daemon=True).start()
+        print(f"Started Kafka consumer for preprocessing topic: {PREPROCESSING_TOPIC}")
 
-    threading.Thread(target=_consumer_loop, args=(PROMOTION_TOPIC, "promotion"), daemon=True).start()
-    print(f"Started Kafka consumer for promotion topic: {PROMOTION_TOPIC}")
+        threading.Thread(target=_consumer_loop, args=(PROMOTION_TOPIC, "promotion"), daemon=True).start()
+        print(f"Started Kafka consumer for promotion topic: {PROMOTION_TOPIC}")
 
 
 def _graceful_shutdown():

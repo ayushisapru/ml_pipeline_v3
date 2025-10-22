@@ -1,5 +1,6 @@
 from client_utils import post_file
 from data_utils import window_data, check_uniform, time_to_feature, subset_scaler
+<<<<<<< Updated upstream
 import os
 # Kafka enable/disable flag (guard Kafka usage across this module)
 ENABLE_KAFKA = os.getenv("ENABLE_KAFKA", "0").lower() in {"1", "true", "yes"}
@@ -8,6 +9,12 @@ print(f"[config] Kafka enabled: {ENABLE_KAFKA}")
 # Import kafka helper functions only when Kafka is enabled. When disabled, define
 # no-op placeholders so existing code can call them safely but they'll be short-
 # circuited by checks (and will log warnings where a function is Kafka-only).
+=======
+# Kafka enable/disable flag (guard Kafka usage across this module)
+ENABLE_KAFKA = os.getenv("ENABLE_KAFKA", "false").lower() == "true"
+print(f"[config] Kafka enabled: {ENABLE_KAFKA}")
+
+>>>>>>> Stashed changes
 if ENABLE_KAFKA:
     from kafka_utils import produce_message, publish_error
 else:
@@ -16,8 +23,11 @@ else:
 
     def publish_error(producer, dlq_topic, operation, status, error_details, payload=None):
         print('[kafka-disabled] skipped publish_error()')
+<<<<<<< Updated upstream
 # Import process-pool helpers for synchronous execution
 from inference_container.process_pool import submit_inference_job, InferenceHTTPError
+=======
+>>>>>>> Stashed changes
 import numpy as np
 import pandas as pd
 import mlflow
